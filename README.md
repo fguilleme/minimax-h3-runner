@@ -1,30 +1,30 @@
-# MiniMax H3 headless runner
+# MiniMax H3 Headless Runner
 
-Runner local MiniMax H3 en trois processus indépendants, sans serveur HTTP ComfyUI, sans Manager et sans exécution du graphe UI.
+A local MiniMax H3 runner split into three independent processes, without the ComfyUI HTTP server, Manager, web interface, or UI graph execution.
 
-Il réutilise les chargeurs et noyaux Python de ComfyUI parce que le DiT W4A8 et ClipProj sont dans leurs formats optimisés. Les poids ne sont ni copiés ni téléchargés.
+It reuses selected ComfyUI Python loaders and kernels because the W4A8 DiT and ClipProj models use their optimized formats. Model weights are neither copied nor downloaded by this project.
 
 ## Pipeline
 
-1. `h3runner.encode` charge Qwen3-VL-4B + ClipProj, encode éventuellement une image initiale et/ou finale avec le VAE vidéo, écrit le conditioning et le latent AV vide, puis termine.
-2. `h3runner.denoise` charge seulement le DiT W4A8 + LoRA, exécute les huit étapes, écrit le latent AV généré, puis termine.
-3. `h3runner.decode` charge les VAE, décode par tuiles temporelles et encode le MP4 avec `ffmpeg`.
+1. `h3runner.encode` loads Qwen3-VL-4B and ClipProj, optionally encodes a first and/or last keyframe with the video VAE, writes the conditioning and empty audiovisual latent, then exits.
+2. `h3runner.denoise` loads only the W4A8 DiT and Turbo LoRA, performs the eight sampling steps, writes the generated audiovisual latent, then exits.
+3. `h3runner.decode` loads the VAEs, performs temporally tiled decoding, and encodes the final MP4 with `ffmpeg`.
 
-La fin de chaque processus force la libération des modèles avant la phase suivante.
+Each process boundary guarantees that the previous model is released before the next phase starts.
 
-## Environnement validé
+## Validated Environment
 
-- Radeon 8060S `gfx1151`, 32 Gio VRAM réservée + 32 Gio RAM
-- ROCm système 7.2.4 dans `/opt/rocm`
-- PyTorch `2.11.0+rocm7.13.0`, runtime HIP `7.13.99004`
+- Radeon 8060S `gfx1151`, 32 GiB reserved VRAM and 32 GiB system RAM
+- System ROCm 7.2.4 under `/opt/rocm`
+- PyTorch `2.11.0+rocm7.13.0`, HIP runtime `7.13.99004`
 - `comfy-kitchen 0.2.34`
-- Python : `/home/francois/comfy/ComfyUI/.venv/bin/python`
-- Docker laissé actif pendant tout le smoke test
-- `comfyui.service` arrêté
+- Python: `/home/francois/comfy/ComfyUI/.venv/bin/python`
+- Docker remained active throughout the smoke tests
+- `comfyui.service` remained stopped
 
-## Modèles réutilisés
+## Reused Models
 
-Les chemins sont résolus sous `/home/francois/comfy/ComfyUI/models` :
+Model paths are resolved under `/home/francois/comfy/ComfyUI/models`:
 
 - `diffusion_models/minimax_h3_fl2va_pruned_w4a8_mixed.safetensors`
 - `text_encoders/qwen3vl_4b_fp8_scaled.safetensors`
@@ -33,22 +33,22 @@ Les chemins sont résolus sous `/home/francois/comfy/ComfyUI/models` :
 - `vae/minimax_h3_audio_vae_fp32.safetensors`
 - `loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors`
 
-## Utilisation
+## Usage
 
 ```bash
 cd /home/francois/projects/minimax-h3-runner
 ./run.sh
 ```
 
-Pour arrêter explicitement le service ComfyUI avant l’exécution :
+To explicitly stop the ComfyUI user service before execution:
 
 ```bash
 ./run.sh --stop-comfy-service
 ```
 
-Le service n’est volontairement pas redémarré. Docker n’est jamais arrêté.
+The service is intentionally not restarted. Docker containers are never stopped.
 
-Pour tout recalculer malgré les artefacts existants :
+To recompute every phase even when valid artifacts already exist:
 
 ```bash
 ./run.sh --force
@@ -56,40 +56,44 @@ Pour tout recalculer malgré les artefacts existants :
 
 ### Image-to-Video
 
-Image initiale :
+Use a first frame:
 
 ```bash
 ./run.sh \
-  --first-frame /chemin/vers/depart.png \
-  --work-dir runs/mon-i2v \
-  --output output/mon-i2v.mp4
+  --first-frame /path/to/start.png \
+  --work-dir runs/my-i2v \
+  --output output/my-i2v.mp4
 ```
 
-Image initiale et image finale :
+Use both first and last frames:
 
 ```bash
 ./run.sh \
-  --first-frame /chemin/vers/depart.png \
-  --last-frame /chemin/vers/arrivee.png \
-  --work-dir runs/mon-i2v-bornes \
-  --output output/mon-i2v-bornes.mp4
+  --first-frame /path/to/start.png \
+  --last-frame /path/to/end.png \
+  --work-dir runs/my-bounded-i2v \
+  --output output/my-bounded-i2v.mp4
 ```
 
-Les images RGB, RGBA ou niveaux de gris sont normalisées en RGB flottant. MiniMax les redimensionne à la résolution configurée ; l’image initiale est ancrée à la première trame et l’image finale à la dernière. Les mêmes options peuvent être placées dans `config.json` avec `first_frame` et `last_frame`.
+RGB, RGBA, and grayscale images are normalized to floating-point RGB. MiniMax resizes them to the configured resolution. The first image is anchored to the first frame and the last image to the final frame. The same inputs can be set in `config.json` through `first_frame` and `last_frame`.
 
-### Vidéo longue par segments chaînés
+Choose width and height as multiples of 32. To preserve the source aspect ratio, select the nearest compatible dimensions. For example, an 853×1280 portrait is nearly 2:3 and is rendered without visible distortion at 384×576.
 
-Le mode longue durée génère plusieurs segments H3, extrait exactement la dernière image décodée de chaque segment et l’utilise comme première image du suivant. La graine est incrémentée pour chaque segment. À l’assemblage, une trame de 0,1 s est retirée au début de chaque continuation. Par défaut, `--audio-policy first` conserve uniquement la piste native du premier segment et la boucle sur toute la vidéo, ce qui évite un changement de musique à chaque jonction. Vidéo et audio sont ensuite coupés à la durée exacte demandée.
+### Long Videos with Chained Segments
+
+Long-video mode generates multiple H3 segments, extracts the exact final decoded frame of each segment, and uses it as the first frame of the next segment. The seed is incremented for every continuation. During assembly, one output-frame duration is removed from the beginning of each continuation to avoid duplicating the boundary keyframe.
+
+By default, `--audio-policy first` keeps only the native soundtrack from the first segment and loops it across the complete video. This prevents the music from changing at every segment boundary. Video and audio are then trimmed to the exact requested duration.
 
 ```bash
 ./run-long.sh \
-  --config config-dancer.json \
+  --config config.json \
   --duration 30 \
-  --work-dir runs/dancer-30s \
-  --output output/dancer-30s.mp4
+  --work-dir runs/my-long-video-30s \
+  --output output/my-long-video-30s.mp4
 ```
 
-Chaque segment possède son propre sous-dossier reprenable :
+Each segment has its own resumable directory:
 
 ```text
 runs/dancer-30s/
@@ -98,32 +102,57 @@ runs/dancer-30s/
   ...
 ```
 
-Une nouvelle exécution saute les phases et segments déjà valides, puis saute aussi la concaténation si son empreinte n’a pas changé. `--force` recalcule tous les segments. Le mode longue durée accepte une image initiale mais pas `last_frame`, car chaque fin de segment est réservée à la continuité automatique. Pour retrouver une piste H3 différente par segment, utiliser explicitement `--audio-policy segments`.
+A repeated invocation skips valid phases and completed segments. Final concatenation is also skipped when its content signature has not changed. Use `--force` to regenerate every segment.
 
-## Reprise
+Long-video mode accepts an initial `first_frame`, but not `last_frame`, because every segment ending is reserved for automatic continuity. To restore independently generated H3 audio for each segment, explicitly pass:
 
-Les fichiers intermédiaires sont sous `runs/fox-56f/` :
+```bash
+--audio-policy segments
+```
+
+## Resuming Runs
+
+Intermediate files are stored under the selected run directory, for example `runs/fox-56f/`:
 
 - `conditioning.{json,safetensors}`
 - `empty-latent.{json,safetensors}`
 - `sampled-latent.{json,safetensors}`
 
-`run.sh` reprend à la première phase manquante. Une empreinte couvre le fichier de configuration et le contenu des keyframes : modifier une image, le prompt ou un paramètre invalide automatiquement les artefacts et relance les trois phases. Les tenseurs sont enregistrés avec Safetensors ; le manifeste JSON préserve la structure des listes, tuples, dictionnaires et scalaires sans pickle.
+`run.sh` resumes from the first missing phase. A content signature covers the configuration file and keyframe contents. Changing an image, prompt, or generation setting automatically invalidates the relevant run and executes the phases again.
 
-## Cadence et audio
+Tensors are stored with Safetensors. A JSON manifest preserves lists, tuples, dictionaries, and scalar values without using pickle.
 
-H3 génère nativement à 24 FPS et aligne le nombre d’images sur `17k + 5`. Une demande de 50 images produit donc 56 images. À 10 FPS, la sortie dure 5,6 secondes.
+## Frame Rate and Audio
 
-Par défaut, `audio_mode: "loop"` conserve le tempo natif de l’audio H3 et le répète jusqu’à la durée vidéo. Deux alternatives restent disponibles dans la configuration : `"stretch"` reproduit l’ancien étirement temporel avec `ffmpeg atempo`, et `"pad"` conserve le tempo puis complète par du silence.
+H3 generates at a native 24 FPS and aligns frame counts to `17k + 5`. A request for 50 frames therefore produces 56 frames. At an output rate of 10 FPS, the resulting segment lasts 5.6 seconds.
 
-## Résultat du smoke test
+The default `audio_mode: "loop"` preserves the native H3 audio tempo and repeats it until the video duration is reached. Two alternatives remain available in the configuration:
 
-- conditioning : `(1, 67, 5120)` FP32
-- latent vidéo : `(1, 24, 17, 22, 38)` FP32
-- latent audio : `(1, 32, 2, 93)` FP32
-- diffusion : 8/8 étapes en environ 55 secondes
-- sortie : 56 images, 608×352, 10 FPS, H.264
-- audio : AAC stéréo 32 kHz, 5,6 secondes
+- `"stretch"`: reproduces the previous temporal stretching behavior with FFmpeg `atempo`.
+- `"pad"`: preserves native tempo and fills the remaining duration with silence.
+
+For long videos, `--audio-policy first` additionally prevents a new soundtrack from being introduced by each generated segment.
+
+## Smoke-Test Results
+
+Single-segment test:
+
+- Conditioning: `(1, 67, 5120)` FP32
+- Video latent: `(1, 24, 17, 22, 38)` FP32
+- Audio latent: `(1, 32, 2, 93)` FP32
+- Diffusion: 8/8 steps in approximately 55–68 seconds
+- Output: 56 frames, H.264 video
+- Audio: stereo AAC at 32 kHz
+
+Validated long-video test:
+
+- Two chained 5.6-second H3 segments
+- Final output: exactly 8.000 seconds
+- 80 frames at 10 FPS
+- 384×576 portrait resolution
+- Video and audio both exactly 8.000 seconds
+- One continuous first-segment soundtrack with measured loop correlation of `0.9993`
+- Successful no-op resume for both segments and final concatenation
 
 ## Tests
 
@@ -132,9 +161,11 @@ PYTHONPATH=src /home/francois/comfy/ComfyUI/.venv/bin/python \
   -m unittest discover -s tests -v
 ```
 
-## Limites
+## Limitations
 
-- Le moteur réutilise des modules Python internes de ComfyUI, mais ne lance pas l’application ComfyUI.
-- Une mise à jour de ComfyUI peut modifier les signatures internes ; les tests et le bootstrap doivent être rejoués après mise à jour.
-- L’attention traite toujours toute la séquence AV pendant la diffusion. Le découpage temporel est utilisé au décodage VAE, pas dans le DiT.
-- `flash-attn` CUDA n’est pas utilisé. PyTorch indique qu’AOTriton AMD expérimental peut être activé, mais il reste désactivé tant qu’il n’est pas validé sur `gfx1151`.
+- The runner imports internal ComfyUI Python modules but does not launch the ComfyUI application or HTTP server.
+- A ComfyUI update may change internal APIs. Run the complete test suite and a smoke test after updating ComfyUI.
+- Attention still covers the complete audiovisual sequence during diffusion. Temporal tiling is used for VAE decoding, not for the DiT.
+- Long-video visual continuity is keyframe-based. Motion can still drift between independently sampled segments.
+- `--audio-policy first` gives a consistent but repeated soundtrack. It does not generate a truly continuous long-form musical composition.
+- The CUDA `flash-attn` package is not used. PyTorch reports that experimental AMD AOTriton attention can be enabled, but it remains disabled until validated on `gfx1151`.
