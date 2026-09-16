@@ -3,6 +3,7 @@
   "height": 352,
   "length": 50,
   "output_fps": 10.0,
+  "audio_mode": "loop",
   "steps": 8,
   "seed": 13092029,
   "sampler": "res_multistep",

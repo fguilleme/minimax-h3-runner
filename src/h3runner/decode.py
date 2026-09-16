@@ -31,6 +31,21 @@ def atempo_factors(speed: float) -> list[float]:
     return factors
 
 
+def audio_ffmpeg_options(
+    mode: str, fps: float, native_fps: float
+) -> tuple[list[str], str | None]:
+    if mode == "loop":
+        return ["-stream_loop", "-1"], None
+    if mode == "pad":
+        return [], "apad"
+    if mode == "stretch":
+        audio_filter = ",".join(
+            f"atempo={factor:.12g}" for factor in atempo_factors(fps / native_fps)
+        )
+        return [], f"{audio_filter},apad" if audio_filter else "apad"
+    raise ValueError(f"unsupported audio mode: {mode}")
+
+
 def write_wav(path: Path, audio: dict) -> None:
     waveform = audio["waveform"].detach().to("cpu", torch.float32)
     if waveform.ndim != 3 or waveform.shape[0] != 1:
@@ -44,7 +59,14 @@ def write_wav(path: Path, audio: dict) -> None:
         output.writeframes(pcm.tobytes())
 
 
-def encode_mp4(images: torch.Tensor, audio: dict, fps: float, output_path: Path, native_fps: float = 24.0) -> None:
+def encode_mp4(
+    images: torch.Tensor,
+    audio: dict,
+    fps: float,
+    output_path: Path,
+    native_fps: float = 24.0,
+    audio_mode: str = "loop",
+) -> None:
     images = images.detach().to("cpu", torch.float32)
     if images.ndim != 4 or images.shape[-1] < 3:
         raise ValueError(f"unexpected video shape: {tuple(images.shape)}")
@@ -55,21 +77,24 @@ def encode_mp4(images: torch.Tensor, audio: dict, fps: float, output_path: Path,
         wav_path = tmp_dir / "audio.wav"
         mp4_path = tmp_dir / "output.mp4"
         write_wav(wav_path, audio)
-        audio_filter = ",".join(f"atempo={factor:.12g}" for factor in atempo_factors(fps / native_fps))
-        audio_filter = f"{audio_filter},apad" if audio_filter else "apad"
+        audio_input_options, audio_filter = audio_ffmpeg_options(
+            audio_mode, fps, native_fps
+        )
         duration = frames / fps
         command = [
             "ffmpeg", "-y", "-v", "error",
             "-f", "rawvideo", "-pix_fmt", "rgb24",
             "-s", f"{width}x{height}", "-r", str(fps), "-i", "pipe:0",
-            "-i", str(wav_path),
+            *audio_input_options, "-i", str(wav_path),
             "-map", "0:v:0", "-map", "1:a:0",
             "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
-            "-filter:a", audio_filter,
             "-c:a", "aac", "-b:a", "128k",
             "-t", f"{duration:.9f}",
             "-movflags", "+faststart", str(mp4_path),
         ]
+        if audio_filter is not None:
+            filter_position = command.index("-c:a")
+            command[filter_position:filter_position] = ["-filter:a", audio_filter]
         process = subprocess.Popen(command, stdin=subprocess.PIPE)
         assert process.stdin is not None
         try:
@@ -110,13 +135,16 @@ def main() -> None:
         audio = runtime.audio_nodes.VAEDecodeAudio.execute(
             audio_vae, {"samples": flat["audio"]}
         ).args[0]
-        encode_mp4(images, audio, config.output_fps, args.output)
+        encode_mp4(
+            images, audio, config.output_fps, args.output, audio_mode=config.audio_mode
+        )
 
     report = {
         "phase": "decode",
         "output": str(args.output),
         "frames": int(images.shape[0]),
         "fps": config.output_fps,
+        "audio_mode": config.audio_mode,
     }
     (args.work_dir / "decode-result.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report))

@@ -30,6 +30,7 @@ class H3Config:
     height: int = 352
     length: int = 50
     output_fps: float = 10.0
+    audio_mode: str = "loop"
     steps: int = 8
     seed: int = 13092028
     sampler: str = "res_multistep"
@@ -66,6 +67,8 @@ class H3Config:
             raise ValueError("height must be a positive multiple of 32")
         if self.output_fps <= 0:
             raise ValueError("output_fps must be positive")
+        if self.audio_mode not in {"loop", "stretch", "pad"}:
+            raise ValueError("audio_mode must be one of: loop, stretch, pad")
         if self.steps <= 0:
             raise ValueError("steps must be positive")
 

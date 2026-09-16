@@ -20,6 +20,11 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.aligned_frames, 56)
         self.assertEqual(config.output_fps, 10.0)
         self.assertEqual(config.output_duration, 5.6)
+        self.assertEqual(config.audio_mode, "loop")
+
+    def test_config_rejects_unknown_audio_mode(self):
+        with self.assertRaisesRegex(ValueError, "audio_mode"):
+            H3Config(audio_mode="slow").validate()
 
     def test_load_config_rejects_unknown_keys_and_converts_paths(self):
         with tempfile.TemporaryDirectory() as tmp:

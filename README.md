@@ -114,7 +114,7 @@ Les fichiers intermédiaires sont sous `runs/fox-56f/` :
 
 H3 génère nativement à 24 FPS et aligne le nombre d’images sur `17k + 5`. Une demande de 50 images produit donc 56 images. À 10 FPS, la sortie dure 5,6 secondes.
 
-Le décodage étire l’audio natif avec `ffmpeg atempo` pour conserver la hauteur et obtenir exactement la même durée que la vidéo.
+Par défaut, `audio_mode: "loop"` conserve le tempo natif de l’audio H3 et le répète jusqu’à la durée vidéo. Deux alternatives restent disponibles dans la configuration : `"stretch"` reproduit l’ancien étirement temporel avec `ffmpeg atempo`, et `"pad"` conserve le tempo puis complète par du silence.
 
 ## Résultat du smoke test
 
