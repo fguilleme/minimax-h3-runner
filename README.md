@@ -1,8 +1,11 @@
 # MiniMax H3 Headless Runner
 
-A local MiniMax H3 runner split into three independent processes, without the ComfyUI HTTP server, Manager, web interface, or UI graph execution.
+<!-- Versions -->
+[English README](README.md) — [README français](README_FR.md)
 
-It reuses selected ComfyUI Python loaders and kernels because the W4A8 DiT and ClipProj models use their optimized formats. Model weights are neither copied nor downloaded by this project.
+Runner local MiniMax H3 split into three independent processes, without the ComfyUI HTTP server, Manager, web interface, or UI graph execution.
+
+It reuses selected ComfyUI Python loaders and kernels because the W4A8 DiT and ClipProj models use their optimized formats. Model weights are neither copied nor downloaded by this project — you must fetch them first (step 2: **Roadmap**) .
 
 ## Pipeline
 
@@ -11,6 +14,53 @@ It reuses selected ComfyUI Python loaders and kernels because the W4A8 DiT and C
 3. `h3runner.decode` loads the VAEs, performs temporally tiled decoding, and encodes the final MP4 with `ffmpeg`.
 
 Each process boundary guarantees that the previous model is released before the next phase starts.
+
+## Roadmap
+
+From `git clone` to generating your first video.
+
+1. **Prerequisites.** Linux + Python ≥ 3.10, `ffmpeg`, and `git`. Any ROCm AMD GPU in the gfx11xx family works (Radeon 8060 / 8070S = gfx1151 validated); ROCm ≥ 7.2; PyTorch for ROCm ≥ 2.6.
+
+2. **Clone.**
+
+```bash
+git clone <URL-TO-this-repo> minmax-h3-runner
+cd minmax-h3-runner
+chmod +x run.sh run-long.sh
+```
+
+3. **Point to ComfyUI and download models.** Set `config.comfy_root` to your ComfyUI install (default `/home/francois/comfy/ComfyUI`). Place these in that root (`unet/`, `vae/`, `text_encoders/`, `lora/`, `custom_nodes/` following standard ComfyUI conventions). See the [Reused Models](#reused-models) table above for the exact names.
+
+| Name | File | Location |
+|---|---|---|
+| UNet + video VAE (W4A8, mixed weights) | `minimax_h3_fl2va_pruned_w4a8_mixed.safetensors` | `models/unet/` (or ComfyUI model path) |
+| Text encoder | `qwen3vl_4b_fp8_scaled.safetensors` | `models/text_encoders/` |
+| Long clip projection (ClipProj) | `mmh3-4b-ClipProj-v3.1.safetensors` | `custom_nodes/ComfyUI-ClipProj/models/` |
+| Video VAE | `minimax_h3_video_vae_fp16.safetensors` | `models/vae/` |
+| Audio VAE | `minimax_h3_audio_vae_fp32.safetensors` | `models/vae/` |
+| LoRA (8-step) | `minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors` | `models/lora/` |
+
+4. **Clone & setup the ClipProj custom node** (required by the text-encoding phase):
+
+```bash
+cd "$(python -c 'import toml,os;print(toml.load(config.json)["comfy_root"])')"
+git clone <URL-TO-ClipProj-repo> custom_nodes/ComfyUI-ClipProj
+# install the node's pip requirements into the same Python env as this runner
+```
+
+5. **Validate (smoke test) from inside the repo, using its real venv:**
+
+```bash
+cd /home/francois/projects/minimax-h3-runner
+PYTHONPATH=src /home/francois/comfy/ComfyUI/.venv/bin/python -m unittest discover -s tests -v
+```
+
+If the suite passes, proceed to an actual generation:
+
+```bash
+cd /home/francois/projects/minimax-h3-runner
+PYTHONPATH=src /home/francois/comfy/ComfyUI/.venv/bin/python -m run --config config.json --work-dir runs/fox-56f --output output/minimax-h3-fd560.mp4
+```
 
 ## Validated Environment
 
