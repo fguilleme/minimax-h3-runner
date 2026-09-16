@@ -77,6 +77,29 @@ Image initiale et image finale :
 
 Les images RGB, RGBA ou niveaux de gris sont normalisées en RGB flottant. MiniMax les redimensionne à la résolution configurée ; l’image initiale est ancrée à la première trame et l’image finale à la dernière. Les mêmes options peuvent être placées dans `config.json` avec `first_frame` et `last_frame`.
 
+### Vidéo longue par segments chaînés
+
+Le mode longue durée génère plusieurs segments H3, extrait exactement la dernière image décodée de chaque segment et l’utilise comme première image du suivant. La graine est incrémentée pour chaque segment. À l’assemblage, une trame de 0,1 s est retirée au début de chaque continuation pour ne pas dupliquer la keyframe ; vidéo et audio sont ensuite coupés à la durée exacte demandée.
+
+```bash
+./run-long.sh \
+  --config config-dancer.json \
+  --duration 30 \
+  --work-dir runs/dancer-30s \
+  --output output/dancer-30s.mp4
+```
+
+Chaque segment possède son propre sous-dossier reprenable :
+
+```text
+runs/dancer-30s/
+  chunk-000/{config.json,segment.mp4,artifacts/}
+  chunk-001/{config.json,segment.mp4,artifacts/}
+  ...
+```
+
+Une nouvelle exécution saute les phases et segments déjà valides, puis saute aussi la concaténation si son empreinte n’a pas changé. `--force` recalcule tous les segments. Le mode longue durée accepte une image initiale mais pas `last_frame`, car chaque fin de segment est réservée à la continuité automatique.
+
 ## Reprise
 
 Les fichiers intermédiaires sont sous `runs/fox-56f/` :
