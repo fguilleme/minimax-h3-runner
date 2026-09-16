@@ -42,6 +42,8 @@ class H3Config:
         "one distant bird call."
     )
     comfy_root: Path = DEFAULT_COMFY
+    first_frame: Path | None = None
+    last_frame: Path | None = None
     unet_name: str = "minimax_h3_fl2va_pruned_w4a8_mixed.safetensors"
     clip_name: str = "qwen3vl_4b_fp8_scaled.safetensors"
     projection_name: str = "mmh3-4b-ClipProj-v3.1.safetensors"
@@ -69,13 +71,18 @@ class H3Config:
 
 
 def load_config(path: str | Path) -> H3Config:
-    data = json.loads(Path(path).read_text())
+    path = Path(path)
+    data = json.loads(path.read_text())
     allowed = {field.name for field in fields(H3Config)}
     unknown = sorted(set(data) - allowed)
     if unknown:
         raise ValueError(f"unknown config keys: {', '.join(unknown)}")
     if "comfy_root" in data:
         data["comfy_root"] = Path(data["comfy_root"])
+    for key in ("first_frame", "last_frame"):
+        if data.get(key) is not None:
+            value = Path(data[key])
+            data[key] = value if value.is_absolute() else path.parent / value
     config = H3Config(**data)
     config.validate()
     return config

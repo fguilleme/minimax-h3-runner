@@ -6,7 +6,7 @@ Il réutilise les chargeurs et noyaux Python de ComfyUI parce que le DiT W4A8 et
 
 ## Pipeline
 
-1. `h3runner.encode` charge Qwen3-VL-4B + ClipProj, écrit le conditioning et le latent AV vide, puis termine.
+1. `h3runner.encode` charge Qwen3-VL-4B + ClipProj, encode éventuellement une image initiale et/ou finale avec le VAE vidéo, écrit le conditioning et le latent AV vide, puis termine.
 2. `h3runner.denoise` charge seulement le DiT W4A8 + LoRA, exécute les huit étapes, écrit le latent AV généré, puis termine.
 3. `h3runner.decode` charge les VAE, décode par tuiles temporelles et encode le MP4 avec `ffmpeg`.
 
@@ -54,6 +54,29 @@ Pour tout recalculer malgré les artefacts existants :
 ./run.sh --force
 ```
 
+### Image-to-Video
+
+Image initiale :
+
+```bash
+./run.sh \
+  --first-frame /chemin/vers/depart.png \
+  --work-dir runs/mon-i2v \
+  --output output/mon-i2v.mp4
+```
+
+Image initiale et image finale :
+
+```bash
+./run.sh \
+  --first-frame /chemin/vers/depart.png \
+  --last-frame /chemin/vers/arrivee.png \
+  --work-dir runs/mon-i2v-bornes \
+  --output output/mon-i2v-bornes.mp4
+```
+
+Les images RGB, RGBA ou niveaux de gris sont normalisées en RGB flottant. MiniMax les redimensionne à la résolution configurée ; l’image initiale est ancrée à la première trame et l’image finale à la dernière. Les mêmes options peuvent être placées dans `config.json` avec `first_frame` et `last_frame`.
+
 ## Reprise
 
 Les fichiers intermédiaires sont sous `runs/fox-56f/` :
@@ -62,7 +85,7 @@ Les fichiers intermédiaires sont sous `runs/fox-56f/` :
 - `empty-latent.{json,safetensors}`
 - `sampled-latent.{json,safetensors}`
 
-`run.sh` reprend à la première phase manquante. Les tenseurs sont enregistrés avec Safetensors ; le manifeste JSON préserve la structure des listes, tuples, dictionnaires et scalaires sans pickle.
+`run.sh` reprend à la première phase manquante. Une empreinte couvre le fichier de configuration et le contenu des keyframes : modifier une image, le prompt ou un paramètre invalide automatiquement les artefacts et relance les trois phases. Les tenseurs sont enregistrés avec Safetensors ; le manifeste JSON préserve la structure des listes, tuples, dictionnaires et scalaires sans pickle.
 
 ## Cadence et audio
 

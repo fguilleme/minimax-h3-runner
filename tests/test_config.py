@@ -24,10 +24,11 @@ class ConfigTests(unittest.TestCase):
     def test_load_config_rejects_unknown_keys_and_converts_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "config.json"
-            path.write_text(json.dumps({"length": 22, "comfy_root": "/tmp/comfy"}))
+            path.write_text(json.dumps({"length": 22, "comfy_root": "/tmp/comfy", "first_frame": "input/start.png"}))
             config = load_config(path)
             self.assertEqual(config.length, 22)
             self.assertEqual(config.comfy_root, Path("/tmp/comfy"))
+            self.assertEqual(config.first_frame, Path(tmp) / "input/start.png")
             path.write_text(json.dumps({"unknown": 1}))
             with self.assertRaisesRegex(ValueError, "unknown config keys"):
                 load_config(path)
