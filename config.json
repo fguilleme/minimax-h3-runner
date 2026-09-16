@@ -1,0 +1,18 @@
+{
+  "width": 608,
+  "height": 352,
+  "length": 50,
+  "output_fps": 10.0,
+  "steps": 8,
+  "seed": 13092029,
+  "sampler": "res_multistep",
+  "scheduler": "simple",
+  "prompt": "Realistic cinematic wildlife shot. A small red fox stands in a misty forest clearing at dawn, gently turns its head toward the camera, leaves moving softly in the breeze. Static camera, natural light, detailed fur, no text, no logo. Audio: quiet forest ambience, light wind through leaves, one distant bird call.",
+  "comfy_root": "/home/francois/comfy/ComfyUI",
+  "unet_name": "minimax_h3_fl2va_pruned_w4a8_mixed.safetensors",
+  "clip_name": "qwen3vl_4b_fp8_scaled.safetensors",
+  "projection_name": "mmh3-4b-ClipProj-v3.1.safetensors",
+  "video_vae_name": "minimax_h3_video_vae_fp16.safetensors",
+  "audio_vae_name": "minimax_h3_audio_vae_fp32.safetensors",
+  "lora_name": "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors"
+}
