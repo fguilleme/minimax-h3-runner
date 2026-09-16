@@ -7,6 +7,7 @@ import math
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from .config import load_config
@@ -50,6 +51,29 @@ def build_chunk_config(
     if continuation_frame is not None:
         config["first_frame"] = str(Path(continuation_frame).resolve())
     return config
+
+
+def build_video_concat_filter(count: int, fps: float, target_duration: float) -> str:
+    if count <= 0:
+        raise ValueError("segment count must be positive")
+    if fps <= 0 or target_duration <= 0:
+        raise ValueError("fps and target duration must be positive")
+    frame_duration = 1.0 / fps
+    filters: list[str] = []
+    inputs: list[str] = []
+    for index in range(count):
+        if index == 0:
+            filters.append(f"[{index}:v]setpts=PTS-STARTPTS[v{index}]")
+        else:
+            filters.append(
+                f"[{index}:v]trim=start={frame_duration:.9f},setpts=PTS-STARTPTS[v{index}]"
+            )
+        inputs.append(f"[v{index}]")
+    filters.append("".join(inputs) + f"concat=n={count}:v=1:a=0[vc]")
+    filters.append(
+        f"[vc]trim=duration={target_duration:.9f},setpts=PTS-STARTPTS[vout]"
+    )
+    return ";".join(filters)
 
 
 def build_concat_filter(count: int, fps: float, target_duration: float) -> str:
@@ -100,27 +124,63 @@ def segment_count(target_duration: float, segment_duration: float, fps: float) -
 
 
 def concat_segments(
-    segments: list[Path], output: Path, fps: float, target_duration: float
+    segments: list[Path],
+    output: Path,
+    fps: float,
+    target_duration: float,
+    audio_policy: str = "segments",
+    native_audio_duration: float | None = None,
 ) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
-    command = ["ffmpeg", "-y", "-v", "error"]
-    for segment in segments:
-        command.extend(["-i", str(segment)])
-    command.extend(
-        [
-            "-filter_complex",
-            build_concat_filter(len(segments), fps=fps, target_duration=target_duration),
-            "-map", "[vout]", "-map", "[aout]", "-r", f"{fps:.9f}",
-            "-c:v", "libx264", "-preset", "medium", "-crf", "18",
-            "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
-            "-ar", "32000", "-movflags", "+faststart", str(output),
-        ]
+    if audio_policy not in {"first", "segments"}:
+        raise ValueError("audio_policy must be one of: first, segments")
+
+    with tempfile.TemporaryDirectory(dir=output.parent) as tmp:
+        command = ["ffmpeg", "-y", "-v", "error"]
+        for segment in segments:
+            command.extend(["-i", str(segment)])
+
+        if audio_policy == "first":
+            if native_audio_duration is None or native_audio_duration <= 0:
+                raise ValueError("native_audio_duration must be positive for first audio policy")
+            native_audio = Path(tmp) / "native-audio.wav"
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-v", "error", "-i", str(segments[0]),
+                    "-vn", "-t", f"{native_audio_duration:.9f}",
+                    "-c:a", "pcm_s16le", str(native_audio),
+                ],
+                check=True,
+            )
+            command.extend(["-stream_loop", "-1", "-i", str(native_audio)])
+            graph = build_video_concat_filter(
+                len(segments), fps=fps, target_duration=target_duration
+            )
+            audio_map = f"{len(segments)}:a:0"
+        else:
+            graph = build_concat_filter(
+                len(segments), fps=fps, target_duration=target_duration
+            )
+            audio_map = "[aout]"
+
+        command.extend(
+            [
+                "-filter_complex", graph, "-map", "[vout]", "-map", audio_map,
+                "-r", f"{fps:.9f}", "-c:v", "libx264", "-preset", "medium",
+                "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "aac",
+                "-b:a", "192k", "-ar", "32000", "-t", f"{target_duration:.9f}",
+                "-movflags", "+faststart", str(output),
+            ]
+        )
+        subprocess.run(command, check=True)
+
+
+def segment_signature(
+    segments: list[Path], fps: float, target_duration: float, audio_policy: str = "segments"
+) -> str:
+    digest = hashlib.sha256(
+        f"{fps:.9f}\0{target_duration:.9f}\0{audio_policy}".encode()
     )
-    subprocess.run(command, check=True)
-
-
-def segment_signature(segments: list[Path], fps: float, target_duration: float) -> str:
-    digest = hashlib.sha256(f"{fps:.9f}\0{target_duration:.9f}".encode())
     for segment in segments:
         digest.update(segment.read_bytes())
     return digest.hexdigest()
@@ -135,6 +195,10 @@ def main() -> None:
     parser.add_argument("--work-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument(
+        "--audio-policy", choices=("first", "segments"), default="first",
+        help="first keeps one continuous soundtrack; segments uses each H3 segment audio.",
+    )
     args = parser.parse_args()
 
     config_path = args.config.resolve()
@@ -186,12 +250,21 @@ def main() -> None:
         if index + 1 < count:
             continuation = extract_last_frame(segment, chunk_dir / "last-frame.png")
 
-    signature = segment_signature(segments, config.output_fps, args.duration)
+    signature = segment_signature(
+        segments, config.output_fps, args.duration, args.audio_policy
+    )
     signature_path = work_dir / "concat-signature.txt"
     previous = signature_path.read_text().strip() if signature_path.is_file() else None
     if args.force or previous != signature or not output.is_file():
         print(f"concatenating {count} segments -> {output}", flush=True)
-        concat_segments(segments, output, config.output_fps, args.duration)
+        concat_segments(
+            segments,
+            output,
+            config.output_fps,
+            args.duration,
+            audio_policy=args.audio_policy,
+            native_audio_duration=config.aligned_frames / 24.0,
+        )
         signature_path.write_text(signature + "\n")
     else:
         print("concatenation: nothing to do", flush=True)
@@ -202,6 +275,7 @@ def main() -> None:
         "target_duration": args.duration,
         "segments": [str(segment) for segment in segments],
         "segment_count": count,
+        "audio_policy": args.audio_policy,
     }
     (work_dir / "longrun-result.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report))

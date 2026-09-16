@@ -8,6 +8,7 @@ from PIL import Image
 from h3runner.longrun import (
     build_chunk_config,
     build_concat_filter,
+    build_video_concat_filter,
     extract_last_frame,
     segment_count,
 )
@@ -44,6 +45,13 @@ class LongRunTests(unittest.TestCase):
         self.assertIn("concat=n=3:v=1:a=1", graph)
         self.assertIn("trim=duration=12.000000000", graph)
         self.assertIn("atrim=duration=12.000000000", graph)
+
+    def test_video_only_concat_ignores_segment_audio(self):
+        graph = build_video_concat_filter(3, fps=10.0, target_duration=12.0)
+        self.assertEqual(graph.count("trim=start=0.100000000"), 2)
+        self.assertIn("concat=n=3:v=1:a=0", graph)
+        self.assertNotIn(":a]", graph)
+        self.assertIn("trim=duration=12.000000000", graph)
 
     def test_extract_last_frame_uses_final_decoded_frame(self):
         with tempfile.TemporaryDirectory() as tmp:

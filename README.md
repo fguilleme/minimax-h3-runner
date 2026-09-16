@@ -79,7 +79,7 @@ Les images RGB, RGBA ou niveaux de gris sont normalisées en RGB flottant. MiniM
 
 ### Vidéo longue par segments chaînés
 
-Le mode longue durée génère plusieurs segments H3, extrait exactement la dernière image décodée de chaque segment et l’utilise comme première image du suivant. La graine est incrémentée pour chaque segment. À l’assemblage, une trame de 0,1 s est retirée au début de chaque continuation pour ne pas dupliquer la keyframe ; vidéo et audio sont ensuite coupés à la durée exacte demandée.
+Le mode longue durée génère plusieurs segments H3, extrait exactement la dernière image décodée de chaque segment et l’utilise comme première image du suivant. La graine est incrémentée pour chaque segment. À l’assemblage, une trame de 0,1 s est retirée au début de chaque continuation. Par défaut, `--audio-policy first` conserve uniquement la piste native du premier segment et la boucle sur toute la vidéo, ce qui évite un changement de musique à chaque jonction. Vidéo et audio sont ensuite coupés à la durée exacte demandée.
 
 ```bash
 ./run-long.sh \
@@ -98,7 +98,7 @@ runs/dancer-30s/
   ...
 ```
 
-Une nouvelle exécution saute les phases et segments déjà valides, puis saute aussi la concaténation si son empreinte n’a pas changé. `--force` recalcule tous les segments. Le mode longue durée accepte une image initiale mais pas `last_frame`, car chaque fin de segment est réservée à la continuité automatique.
+Une nouvelle exécution saute les phases et segments déjà valides, puis saute aussi la concaténation si son empreinte n’a pas changé. `--force` recalcule tous les segments. Le mode longue durée accepte une image initiale mais pas `last_frame`, car chaque fin de segment est réservée à la continuité automatique. Pour retrouver une piste H3 différente par segment, utiliser explicitement `--audio-policy segments`.
 
 ## Reprise
 
