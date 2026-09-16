@@ -1,0 +1,13 @@
+[Unit]
+Description=MiniMax H3 HTTP video generation server
+After=default.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/francois/projects/minimax-h3-runner
+ExecStart=/home/francois/comfy/ComfyUI/.venv/bin/python -m src.h3runner.server --host 127.0.0.1 --port 8988 --comfy-root /home/francois/comfy/ComfyUI --runs-dir /home/francois/projects/minimax-h3-runner/runs --log-dir /home/francois/projects/minimax-h3-runner/log --pid /home/francois/projects/minimax-h3-runner/runs/server.pid
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

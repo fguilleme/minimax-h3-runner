@@ -83,6 +83,93 @@ Model paths are resolved under `/home/francois/comfy/ComfyUI/models`:
 - `vae/minimax_h3_audio_vae_fp32.safetensors`
 - `loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors`
 
+## HTTP server and curl examples
+
+The optional HTTP server queues jobs and returns immediately. It does not
+launch the ComfyUI application; it launches `h3runner.longrun` in the same
+ComfyUI virtual environment.
+
+Start it from the project directory:
+
+```bash
+PYTHONPATH=src /home/francois/comfy/ComfyUI/.venv/bin/python \
+  -m h3runner.server \
+  --host 127.0.0.1 --port 8988 \
+  --comfy-root /home/francois/comfy/ComfyUI \
+  --runs-dir runs --log-dir log --pid runs/server.pid
+```
+
+Check readiness:
+
+```bash
+curl -s http://127.0.0.1:8988/healthz
+```
+
+### Example 1 — prompt only, 5 seconds at 10 fps
+
+```bash
+curl -sS -X POST http://127.0.0.1:8988/generate \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "prompt": "A red fox walking through a sunlit forest clearing",
+    "duration": 5,
+    "fps": 10,
+    "width": 384,
+    "height": 224
+  }'
+```
+
+### Example 2 — image plus prompt, 5 seconds at 10 fps
+
+`first_frame` may be an absolute path or a path relative to the directory
+from which the server was started.
+
+```bash
+curl -sS -X POST http://127.0.0.1:8988/generate \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "prompt": "The fox slowly turns its head while leaves move in the breeze",
+    "first_frame": "input/fox-first.png",
+    "duration": 5,
+    "fps": 10,
+    "width": 384,
+    "height": 224
+  }'
+```
+
+### Example 3 — long video
+
+The server chains H3 segments until the requested duration. This example
+uses one soundtrack policy and an initial image:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8988/generate \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "prompt": "A dancer performs a graceful energetic routine in a studio",
+    "first_frame": "input/dancer-source.jpg",
+    "duration": 30,
+    "fps": 10,
+    "width": 256,
+    "height": 384,
+    "audio": "first"
+  }'
+```
+
+Each response contains a job id. Poll it until `state` is `done` or
+`failed`:
+
+```bash
+curl -sS 'http://127.0.0.1:8988/status?job=JOB_ID'
+```
+
+The response's `output` field gives the generated MP4 path and `log_path`
+gives the child-process log. Cancel a running job with:
+
+```bash
+curl -sS -X DELETE 'http://127.0.0.1:8988/status?job=JOB_ID'
+```
+
 ## Usage
 
 ```bash

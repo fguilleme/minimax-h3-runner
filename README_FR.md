@@ -1,132 +1,202 @@
-# MiniMax H3 — Tête-à-tête headless (Français)
+# MiniMax H3 Headless Runner — Français
 
-> **Versions** : [English README](README.md) — [README français](README_FR.md)
+[English README](README.md) — **README français**
 
-Runner local MiniMax H3 en trois processus indépendants, sans le serveur HTTP ComfyUI, ni Manager, ni interface graphique.
+Runner local MiniMax H3 en trois processus indépendants : encodage,
+diffusion puis décodage/encapsulation MP4. Il réutilise les chargeurs et
+noyaux Python de ComfyUI, mais ne lance ni l'application ComfyUI, ni son
+serveur HTTP, ni Manager.
 
-Il réutilise les chargeurs et noyaux Python de ComfyUI parce que le DiT W4A8 et ClipProj sont dans leurs formats optimisés. Les poids ne sont ni copiés ni téléchargés par ce projet — vous devez les récupérer à l'avance (étape 2 de la roadmap) .
+Les poids ne sont pas téléchargés par ce projet. Ils doivent déjà être
+présents dans l'installation ComfyUI indiquée par `comfy_root`.
 
-## Évolution des segments audio longs
+## Prérequis
 
-Un seul `.mp4` généré ; chaque **segment** d'une longue vidéo est écrit dans son propre dossier de l'exécution, avec exactement les mêmes données d'artefacts. Aucun fichier n'est réutilisé d'une exécution à l'autre : c'est intentionnel pour ne jamais mélanger des segments de vidéos différentes lors d'une concaténation ultérieure.
+- Linux, Python >= 3.10, `ffmpeg` et Git ;
+- GPU AMD ROCm gfx11xx validé, notamment Radeon 8060S/gfx1151 ;
+- PyTorch ROCm >= 2.6 et ROCm >= 7.2 ;
+- ComfyUI installé, avec son environnement virtuel `.venv` ;
+- les modèles MiniMax H3 et ClipProj aux emplacements décrits dans le
+  [README anglais](README.md#reused-models).
 
-## Roadmap : du `git clone` à la génération vidéo
-
-### 1. Prérequis
-
-- Linux, `git`, `ffmpeg`, Python ≥ 3.10, environ 80 GiB de RAM, un GPU AMD ROCm (Radeon 8060S ou équivalent gfx11xx — ROCm gfx1151 validé).
-- La source ComfyUI déjà installée (utilisée comme **chargement** ; aucune nouvelle instance ComfyUI n'est créée).
-- ROCm ≥ 7.2 ; PyTorch ROCm ≥ 2.6.
-
-### 2. Télécharger les modèles
-
-Placez les six fichiers `.safetensors` dans `{comfy_root}/models/`. L'arborescence standard de ComfyUI attend `unet/`, `vae/`, `text_encoders/` et `lora/` :
-
-| Fichier | Chemin estimé | Rôle |
-|---|---|---|
-| `minimax_h3_fl2va_pruned_w4a8_mixed.safetensors` | `models/unet/…` | UNet + VAE vidéo (W4A8, pesage mixte) |
-| `minimax_h3_video_vae_fp16.safetensors` | `models/vae/…` | VAE de la vidéo (FP16) |
-| `minimax_h3_audio_vae_fp32.safetensors` | `models/vae/…` | VAE de l'audio (FP32) |
-| `qwen3vl_4b_fp8_scaled.safetensors` | `models/text_encoders/…` | Encodeur de texte |
-| `minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors` | `models/lora/…` | LoRA à 8 étapes |
-
-Projection Clip :
-
-- `mmh3-4b-ClipProj-v3.1.safetensors` dans `custom_nodes/ComfyUI-ClipProj/models/`.
-
-> Vérifiez le nom réel du dépôt (source MiniMax ou le hub HF de référence) ; les noms de fichiers ci-dessus provient de `config.json`.
-
-### 3. Installer ComfyUI et l'environnement virtuel
+Depuis le dépôt :
 
 ```bash
-COMFY="${COMFY:-$HOME/comfy/ComfyUI}"
-command -v git >/dev/null || (sudo pacman -S git)   # ou apt-get install -y git
-git clone --depth 1 <URL_DU_REPO_COMFYUI> "$COMFY"
-cd "$COMFY" && ./venv/bin/python -m venv .venv && source .venv/bin/activate
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu121
-git submodule update --init --recursive custom_nodes/ComfyUI-ClipProj
+cd /home/francois/projects/minimax-h3-runner
+PYTHONPATH=src /home/francois/comfy/ComfyUI/.venv/bin/python \
+  -m unittest discover -s tests -v
 ```
 
-### 4. Télécharger le runner et l'ouvrir
+## Génération directe
+
+Vidéo courte avec le script fourni :
 
 ```bash
-cd "$ROOT_PROJECT"
-git clone <URL_DU_REPO_MINIMAX> .
-source ./h3runner/venv/bin/activate && cd src && pip install -e .
+./run.sh
 ```
 
-### 5. Valider l'environnement (Run.sh)
-
-Le script de validation (`--steps`, --fps` de la config). Il **ne lance pas** `ComfyUI/Manager`.
-
-```bash
-./run.sh          # depuis le dépôt du runner
-git diff        # si rien ne ressort, la validation est stable
-git fetch --all && git pull
-python -m unittest test_*.py -v --force
-```
-
-### 6. Générer une courte vidéo (Run.sh)
+Image-to-video avec une première image :
 
 ```bash
 ./run.sh \
-  --config "${RUN_PROJECT}/config.json" \
-  --work-dir runs/mon-cerf \
-  --output output/minimax-h3-mon-cerf-10fps.mp4
+  --first-frame input/fox-first.png \
+  --work-dir runs/fox-i2v \
+  --output output/fox-i2v.mp4
 ```
 
-### 7. Générer une longue vidéo (Run-long.sh)
-
-`--first-frame`, `--output` ; `--duration` en secondes :
+Vidéo longue par segments chaînés :
 
 ```bash
 ./run-long.sh \
   --config config.json \
   --duration 30 \
-  --output output/minimax-h3-30s.mp4
+  --work-dir runs/fox-long-30s \
+  --output output/fox-long-30s.mp4 \
+  --audio-policy first
 ```
 
-### 8. Suivi des problèmes
+Les segments sont générés avec continuité : la dernière image décodée d'un
+segment devient la première image du suivant. Les exécutions sont
+reprises automatiquement si leurs artefacts sont encore valides ; utiliser
+`--force` pour tout recalculer.
 
-| Symptôme | Cause commune / correctif |
-|---|---|
-| `ComfyUI not found` | `comfy_root` mal nommé ; vérifier le path dans `config.json`. |
-| Échec des import de `h3runner` | Renommer l'environnement virtuel `venv`. |
-| `CUDA_OUT_OF_MEMORY`, VRAM saturée | `--lowvram` / `--novram` ; config GPU plus conservatrice. |
-| VAE audio/vidéo manquant | Vérifier que les `.safetensors` sont où l'arborescence les attend. |
-| `ClipProj` introuvable | Sous-modules : `git submodule --init init`. |
+## Serveur HTTP et exemples `curl`
 
-## Configuration
+Le serveur accepte un JSON, place le travail en arrière-plan et renvoie
+immédiatement un identifiant de job. Il lance `h3runner.longrun` dans le
+même environnement Python que ComfyUI.
 
-| Paramètre | Valeur par défaut | Rôle |
-|---|---|---|
-| `length` | 50 | Nombre d'images de base (≈ `length/2+1` après post-traitement). |
-| `duration` / `output_fps` | — | Durée finale de la vidéo, fps. |
-| `steps` / `sampler` | 8 / `res_multistep` | Qualité vs vitesse ; `steps=8`, `simple`. |
-| `seed` | 13092029 | Graine (répétable). |
-| `audio_mode` | `loop` | Conserve la piste native si `first_frame` non fourni. |
-| `unet_name` / `video_vae_name` / `audio_vae_name` | — | Poids des VAE vidéo/audio. |
-
-## Tests unitaires
+Démarrage depuis le répertoire du projet :
 
 ```bash
-source .venv/bin/activate && cd src && pip install -e .
+cd /home/francois/projects/minimax-h3-runner
+PYTHONPATH=src /home/francois/comfy/ComfyUI/.venv/bin/python \
+  -m h3runner.server \
+  --host 127.0.0.1 \
+  --port 8988 \
+  --comfy-root /home/francois/comfy/ComfyUI \
+  --runs-dir runs \
+  --log-dir log \
+  --pid runs/server.pid
 ```
 
-Un seul `.mp4` est généré ; chaque segment d'une vidéo longue est écrit dans son propre dossier, avec exactement les mêmes artefacts. Il ne réutilise aucun fichier d'une exécution à l'autre — intentionnel pour éviter de mélanger des segments entre vidéos quand on concatène.
+Vérifier que le serveur répond :
 
-### Évolution des segments audio longs
+```bash
+curl -sS http://127.0.0.1:8988/healthz
+# {"ok": true}
+```
 
-Le runner génère une seule sortie `.mp4` ; chaque segment d'une longue vidéo est écrit dans son propre dossier de run avec les mêmes données d'artefacts. Il ne réutilise **jamais** un fichier d'une exécution à l'autre — intentionnel pour ne jamais mélanger des segments entre vidéos lors d'une concaténation.
+### Exemple 1 — prompt simple, 5 secondes, 10 fps
 
-## Utilisations courantes
+```bash
+curl -sS -X POST http://127.0.0.1:8988/generate \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "prompt": "Un renard roux marche dans une clairière ensoleillée",
+    "duration": 5,
+    "fps": 10,
+    "width": 384,
+    "height": 224
+  }'
+```
 
-| Usage | Commande | Exemple de sortie |
-|---|---|---|
-| Courte (≤ 8 s) | `h3runner.run --config …` | `output/*.mp4` |
-| Longue (≥ 15 s) | `h3runner.longrun --steps 12 --fps 12 …` | `runs/*` + `output/*.mp4` |
+La réponse `201` contient notamment `job.id` :
 
----
+```json
+{"job":{"id":"abcd1234","state":"running"},"message":"job queued"}
+```
 
-**Retour vers le README anglais :** [English README](README.md)
+### Exemple 2 — une image et un prompt, 5 secondes, 10 fps
+
+`first_frame` accepte un chemin absolu ou un chemin relatif au répertoire
+depuis lequel le serveur a été démarré :
+
+```bash
+curl -sS -X POST http://127.0.0.1:8988/generate \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "prompt": "Le renard tourne lentement la tête pendant que les feuilles bougent",
+    "first_frame": "input/fox-first.png",
+    "duration": 5,
+    "fps": 10,
+    "width": 384,
+    "height": 224
+  }'
+```
+
+### Exemple 3 — longue durée
+
+Cet exemple demande 30 secondes et utilise une image initiale. Le serveur
+chaîne autant de segments H3 que nécessaire :
+
+```bash
+curl -sS -X POST http://127.0.0.1:8988/generate \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "prompt": "Une danseuse exécute une chorégraphie énergique et élégante en studio",
+    "first_frame": "input/dancer-source.jpg",
+    "duration": 30,
+    "fps": 10,
+    "width": 256,
+    "height": 384,
+    "audio": "first"
+  }'
+```
+
+### Suivre ou annuler un job
+
+Remplacer `JOB_ID` par l'identifiant reçu lors du POST :
+
+```bash
+curl -sS 'http://127.0.0.1:8988/status?job=JOB_ID'
+```
+
+États possibles : `running`, `done` ou `failed`. Le champ `output` donne
+le chemin du MP4 et `log_path` celui du journal du job.
+
+Pour annuler un job en cours :
+
+```bash
+curl -sS -X DELETE 'http://127.0.0.1:8988/status?job=JOB_ID'
+```
+
+## Paramètres JSON
+
+- `prompt` : texte de génération ;
+- `first_frame` ou `firstframe` : image initiale facultative ;
+- `duration` ou `secs` : durée finale en secondes ;
+- `fps` ou `framerate` : fréquence de sortie ;
+- `width`, `height` : dimensions, de préférence des multiples de 32 ;
+- `steps`, `seed`, `sampler`, `scheduler` : paramètres de génération ;
+- `audio` : `first` ou `segments` pour les longues vidéos.
+
+Les valeurs par défaut du serveur sont `704x480`, 10 fps, 6 secondes et
+8 étapes. Pour obtenir exactement 5 secondes à 10 fps, les exemples
+explicitent `duration: 5` et `fps: 10`.
+
+## systemd
+
+Le dépôt fournit l'unité prête à copier dans
+`systemd/minimax-h3-server.service`. Installer et démarrer le service avec :
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp systemd/minimax-h3-server.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now minimax-h3-server.service
+systemctl --user status minimax-h3-server.service
+```
+
+Le serveur ne doit pas être exposé sur le réseau sans authentification ou reverse
+proxy sécurisé : l'interface actuelle est volontairement minimale et ne
+fournit pas d'authentification HTTP.
+
+## Limites connues
+
+- Le serveur garde les jobs en mémoire ; après son redémarrage, les anciens
+  identifiants ne sont plus interrogeables via `/status`.
+- La continuité des longues vidéos est fondée sur la première/dernière image
+  des segments ; elle ne garantit pas l'absence totale de dérive visuelle.
+- Le son `audio: first` conserve la bande-son du premier segment et la boucle,
+  plutôt que de composer une bande-son longue réellement continue.
