@@ -170,6 +170,37 @@ gives the child-process log. Cancel a running job with:
 curl -sS -X DELETE 'http://127.0.0.1:8988/status?job=JOB_ID'
 ```
 
+## AI video post-processing: Real-ESRGAN and RIFE
+
+For arbitrary input videos, use [Video2X](https://github.com/k4yt3x/video2x),
+which provides Vulkan backends for [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN)
+(super-resolution) and [RIFE](https://github.com/hzwer/ECCV2022-RIFE)
+(frame interpolation). This is separate from MiniMax H3 generation. The
+Linux AppImage was validated on an AMD Radeon 8060S with RADV/Vulkan.
+
+Example: upscale a portrait video 2x, then interpolate 10 fps to 30 fps:
+
+```bash
+mkdir -p tools/video2x
+curl -fL -o tools/video2x/Video2X-x86_64.AppImage \\
+  https://github.com/k4yt3x/video2x/releases/download/6.4.0/Video2X-x86_64.AppImage
+chmod +x tools/video2x/Video2X-x86_64.AppImage
+
+# 2x super-resolution
+./tools/video2x/Video2X-x86_64.AppImage --no-progress \\
+  -i runs/input.mp4 -o runs/input-realesrgan-2x.mp4 \\
+  -p realesrgan -s 2 --realesrgan-model realesr-animevideov3
+
+# RIFE x3: 10 fps -> 30 fps
+./tools/video2x/Video2X-x86_64.AppImage --no-progress \\
+  -i runs/input-realesrgan-2x.mp4 -o runs/input-realesrgan-2x-rife-30fps.mp4 \\
+  -p rife -m 3 --rife-model rife-v4.6
+```
+
+Use dimensions that are multiples of 32 for H3 generation. Real-ESRGAN
+reconstructs plausible detail; it cannot recover detail absent from the source.
+RIFE synthesizes intermediate frames and can produce artifacts around fast motion.
+
 ## Usage
 
 ```bash
