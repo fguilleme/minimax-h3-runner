@@ -158,8 +158,8 @@ class Manager:
 
         work_dir = _fresh_pid_dir(self.runs_root, {c.name for c in self.runs_root.iterdir() if c.is_dir()})
         work_dir.mkdir(parents=True, exist_ok=True)
-        output = Path(f"{self.runs_root}/{uuid.uuid4().hex[:8]}.mp4")
         job_id = uuid.uuid4().hex[:8]
+        output = self.runs_root / f"{job_id}.mp4"
 
         cfg: dict[str, object] = {
             "width": width,
@@ -209,7 +209,6 @@ class Manager:
         )
         with self._lock:
             self._jobs[job_id] = job
-        self.pid_file.write_text(str(proc.pid) + "\n")
         return job
 
     def get(self, job_id: str) -> Job | None:
@@ -241,6 +240,27 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("content-length") or 0)
         return self.rfile.read(length) if length else b""
 
+    def _send_file(self, path: Path, content_type: str, filename: str) -> None:
+        try:
+            size = path.stat().st_size
+        except OSError:
+            self._send(404, {"error": "video file not found"})
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(size))
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.end_headers()
+        if self.command != "HEAD":
+            with path.open("rb") as source:
+                while chunk := source.read(1024 * 1024):
+                    self.wfile.write(chunk)
+
+    def _job_payload(self, job: Job) -> dict:
+        payload = job.to_dict()
+        payload["video_url"] = f"/video?job={job.id}"
+        return payload
+
     # ---- endpoints --------
     def do_POST(self):
         if self.path != "/generate":
@@ -256,12 +276,26 @@ class Handler(BaseHTTPRequestHandler):
             job = self.manager.submit(params)
         except (OSError, ValueError) as exc:
             self._send(400, {"error": str(exc)}); return
-        self._send(201, {"job": job.to_dict(), "message": "job queued"})
+        self._send(201, {"job": self._job_payload(job), "message": "job queued"})
 
     def do_GET(self):
         query = parse_qs(self.path.split("?", 1)[-1]) if "?" in self.path else {}
-        if self.path == "/healthz":
+        if self.path.split("?", 1)[0] == "/healthz":
             self._send(200, {"ok": True}); return
+        if self.path.split("?", 1)[0] == "/video":
+            job_id = query.get("job", [None])[0]
+            if not job_id:
+                self._send(400, {"error": "query param 'job' is required"})
+                return
+            job = self.manager.get(job_id)
+            if not job:
+                self._send(404, {"error": f"unknown job {job_id!r}"})
+                return
+            if job.state != "done":
+                self._send(409, {"error": "video is not ready", "state": job.state})
+                return
+            self._send_file(job.output, "video/mp4", f"minimax-h3-{job.id}.mp4")
+            return
         job_id = query.get("job", [None])[0]
         if not job_id:
             self._send(400, {"error": "query param 'job' is required"})
@@ -270,7 +304,7 @@ class Handler(BaseHTTPRequestHandler):
         if not job:
             self._send(404, {"error": f"unknown job {job_id!r}"})
             return
-        self._send(200, {"job": job.to_dict()})
+        self._send(200, {"job": self._job_payload(job)})
 
     def do_DELETE(self):
         query = parse_qs(self.path.split("?", 1)[-1]) if "?" in self.path else {}
@@ -322,8 +356,10 @@ def main() -> None:
     Handler.manager = manager
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     server.daemon_threads = True
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
+    pid_file.write_text(f"{os.getpid()}\n")
     print(f"minimax-h3 HTTP server on {args.host}:{args.port}", flush=True)
-    print("POST /generate  GET /status?job=ID  DELETE /status?job=ID  GET /healthz", flush=True)
+    print("POST /generate  GET /status?job=ID  GET /video?job=ID  DELETE /status?job=ID  GET /healthz", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

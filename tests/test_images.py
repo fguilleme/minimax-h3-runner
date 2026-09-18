@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from h3runner.images import load_image_tensor
+from h3runner.images import aspect_preserving_canvas, load_image_tensor
 
 
 class ImageTests(unittest.TestCase):
@@ -20,6 +20,14 @@ class ImageTests(unittest.TestCase):
         self.assertEqual(str(tensor.dtype), "torch.float32")
         self.assertAlmostEqual(float(tensor[0, 0, 0, 0]), 1.0)
         self.assertAlmostEqual(float(tensor[0, 0, 0, 1]), 128 / 255)
+
+    def test_aspect_preserving_canvas_uses_multiples_of_32(self):
+        self.assertEqual(aspect_preserving_canvas(1920, 1080), (1344, 768))
+        self.assertEqual(aspect_preserving_canvas(1080, 1920), (768, 1344))
+
+    def test_aspect_preserving_canvas_rejects_invalid_dimensions(self):
+        with self.assertRaises(ValueError):
+            aspect_preserving_canvas(0, 1080)
 
 
 if __name__ == "__main__":

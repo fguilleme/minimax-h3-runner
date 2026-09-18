@@ -10,7 +10,51 @@ import sys
 import tempfile
 from pathlib import Path
 
-from .config import load_config
+from .config import align_frame_count, load_config
+
+
+def parse_prompt_schedule(prompt: str) -> list[tuple[float, str]] | None:
+    """Parse ``seconds:prompt|seconds:prompt`` or return None for plain text."""
+    if ":" not in prompt and "|" not in prompt:
+        return None
+    if "|" not in prompt:
+        prefix = prompt.split(":", 1)[0].strip()
+        try:
+            float(prefix)
+        except ValueError:
+            return None
+    entries = prompt.split("|")
+    parsed: list[tuple[float, str]] = []
+    for entry in entries:
+        duration_text, separator, text = entry.partition(":")
+        if not separator:
+            raise ValueError("each scheduled prompt must be duration:prompt")
+        try:
+            duration = float(duration_text.strip())
+        except ValueError as exc:
+            raise ValueError("scheduled prompt duration must be numeric") from exc
+        text = text.strip()
+        if duration <= 0:
+            raise ValueError("scheduled prompt duration must be positive")
+        if not text:
+            raise ValueError("scheduled prompt text must not be empty")
+        parsed.append((duration, text))
+    return parsed
+
+
+def build_scheduled_chunk_config(
+    base: dict, index: int, continuation_frame: str | Path | None,
+    duration: float, prompt: str,
+) -> dict:
+    config = build_chunk_config(base, index, continuation_frame)
+    fps = float(base.get("output_fps", 0))
+    if fps <= 0:
+        raise ValueError("output_fps must be positive for scheduled prompts")
+    # Continuation chunks begin with the previous chunk's last frame. Generate
+    # one extra frame so deduplication preserves the requested duration.
+    config["length"] = max(5, round(duration * fps) + (1 if index else 0))
+    config["prompt"] = prompt
+    return config
 
 
 def extract_last_frame(video: str | Path, output: str | Path) -> Path:
@@ -53,20 +97,37 @@ def build_chunk_config(
     return config
 
 
-def build_video_concat_filter(count: int, fps: float, target_duration: float) -> str:
+def build_video_concat_filter(
+    count: int,
+    fps: float,
+    target_duration: float,
+    segment_durations: list[float] | None = None,
+) -> str:
     if count <= 0:
         raise ValueError("segment count must be positive")
     if fps <= 0 or target_duration <= 0:
         raise ValueError("fps and target duration must be positive")
+    if segment_durations is not None:
+        if len(segment_durations) != count or any(value <= 0 for value in segment_durations):
+            raise ValueError("segment durations must be positive and match segment count")
     frame_duration = 1.0 / fps
     filters: list[str] = []
     inputs: list[str] = []
     for index in range(count):
         if index == 0:
-            filters.append(f"[{index}:v]setpts=PTS-STARTPTS[v{index}]")
+            trim = (
+                f"trim=duration={segment_durations[index]:.9f},"
+                if segment_durations is not None else ""
+            )
+            filters.append(f"[{index}:v]{trim}setpts=PTS-STARTPTS[v{index}]")
         else:
+            duration = (
+                f":duration={segment_durations[index]:.9f}"
+                if segment_durations is not None else ""
+            )
             filters.append(
-                f"[{index}:v]trim=start={frame_duration:.9f},setpts=PTS-STARTPTS[v{index}]"
+                f"[{index}:v]trim=start={frame_duration:.9f}{duration},"
+                f"setpts=PTS-STARTPTS[v{index}]"
             )
         inputs.append(f"[v{index}]")
     filters.append("".join(inputs) + f"concat=n={count}:v=1:a=0[vc]")
@@ -76,24 +137,46 @@ def build_video_concat_filter(count: int, fps: float, target_duration: float) ->
     return ";".join(filters)
 
 
-def build_concat_filter(count: int, fps: float, target_duration: float) -> str:
+def build_concat_filter(
+    count: int,
+    fps: float,
+    target_duration: float,
+    segment_durations: list[float] | None = None,
+) -> str:
     if count <= 0:
         raise ValueError("segment count must be positive")
     if fps <= 0 or target_duration <= 0:
         raise ValueError("fps and target duration must be positive")
+    if segment_durations is not None:
+        if len(segment_durations) != count or any(value <= 0 for value in segment_durations):
+            raise ValueError("segment durations must be positive and match segment count")
     frame_duration = 1.0 / fps
     filters: list[str] = []
     concat_inputs: list[str] = []
     for index in range(count):
         if index == 0:
-            filters.append(f"[{index}:v]setpts=PTS-STARTPTS[v{index}]")
-            filters.append(f"[{index}:a]asetpts=PTS-STARTPTS[a{index}]")
+            trim = (
+                f"trim=duration={segment_durations[index]:.9f},"
+                if segment_durations is not None else ""
+            )
+            atrim = (
+                f"atrim=duration={segment_durations[index]:.9f},"
+                if segment_durations is not None else ""
+            )
+            filters.append(f"[{index}:v]{trim}setpts=PTS-STARTPTS[v{index}]")
+            filters.append(f"[{index}:a]{atrim}asetpts=PTS-STARTPTS[a{index}]")
         else:
-            filters.append(
-                f"[{index}:v]trim=start={frame_duration:.9f},setpts=PTS-STARTPTS[v{index}]"
+            duration = (
+                f":duration={segment_durations[index]:.9f}"
+                if segment_durations is not None else ""
             )
             filters.append(
-                f"[{index}:a]atrim=start={frame_duration:.9f},asetpts=PTS-STARTPTS[a{index}]"
+                f"[{index}:v]trim=start={frame_duration:.9f}{duration},"
+                f"setpts=PTS-STARTPTS[v{index}]"
+            )
+            filters.append(
+                f"[{index}:a]atrim=start={frame_duration:.9f}{duration},"
+                f"asetpts=PTS-STARTPTS[a{index}]"
             )
         concat_inputs.extend((f"[v{index}]", f"[a{index}]"))
     filters.append(
@@ -130,6 +213,7 @@ def concat_segments(
     target_duration: float,
     audio_policy: str = "segments",
     native_audio_duration: float | None = None,
+    segment_durations: list[float] | None = None,
 ) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     if audio_policy not in {"first", "segments"}:
@@ -154,12 +238,14 @@ def concat_segments(
             )
             command.extend(["-stream_loop", "-1", "-i", str(native_audio)])
             graph = build_video_concat_filter(
-                len(segments), fps=fps, target_duration=target_duration
+                len(segments), fps=fps, target_duration=target_duration,
+                segment_durations=segment_durations,
             )
             audio_map = f"{len(segments)}:a:0"
         else:
             graph = build_concat_filter(
-                len(segments), fps=fps, target_duration=target_duration
+                len(segments), fps=fps, target_duration=target_duration,
+                segment_durations=segment_durations,
             )
             audio_map = "[aout]"
 
@@ -176,10 +262,11 @@ def concat_segments(
 
 
 def segment_signature(
-    segments: list[Path], fps: float, target_duration: float, audio_policy: str = "segments"
+    segments: list[Path], fps: float, target_duration: float,
+    audio_policy: str = "segments", segment_durations: list[float] | None = None,
 ) -> str:
     digest = hashlib.sha256(
-        f"{fps:.9f}\0{target_duration:.9f}\0{audio_policy}".encode()
+        f"{fps:.9f}\0{target_duration:.9f}\0{audio_policy}\0{segment_durations}".encode()
     )
     for segment in segments:
         digest.update(segment.read_bytes())
@@ -209,10 +296,15 @@ def main() -> None:
     config = load_config(config_path)
     if config.last_frame is not None:
         raise ValueError("long-run mode does not support last_frame")
-    count = segment_count(args.duration, config.output_duration, config.output_fps)
+    schedule = parse_prompt_schedule(config.prompt)
+    target_duration = sum(duration for duration, _ in schedule) if schedule else args.duration
+    count = len(schedule) if schedule else segment_count(
+        target_duration, config.output_duration, config.output_fps
+    )
     print(
-        f"long run: target={args.duration:.3f}s segments={count} "
-        f"segment={config.output_duration:.3f}s",
+        f"long run: target={target_duration:.3f}s segments={count} "
+        f"segment={config.output_duration:.3f}s"
+        + (" prompt_schedule=enabled" if schedule else ""),
         flush=True,
     )
 
@@ -234,7 +326,14 @@ def main() -> None:
         segment = chunk_dir / "segment.mp4"
         chunk_dir.mkdir(parents=True, exist_ok=True)
 
-        chunk_data = build_chunk_config(base, index=index, continuation_frame=continuation)
+        if schedule:
+            prompt_duration, prompt_text = schedule[index]
+            chunk_data = build_scheduled_chunk_config(
+                base, index=index, continuation_frame=continuation,
+                duration=prompt_duration, prompt=prompt_text,
+            )
+        else:
+            chunk_data = build_chunk_config(base, index=index, continuation_frame=continuation)
         chunk_config = chunk_dir / "config.json"
         chunk_config.write_text(json.dumps(chunk_data, indent=2, ensure_ascii=False) + "\n")
         command = [
@@ -250,8 +349,10 @@ def main() -> None:
         if index + 1 < count:
             continuation = extract_last_frame(segment, chunk_dir / "last-frame.png")
 
+    scheduled_durations = [duration for duration, _ in schedule] if schedule else None
     signature = segment_signature(
-        segments, config.output_fps, args.duration, args.audio_policy
+        segments, config.output_fps, target_duration, args.audio_policy,
+        scheduled_durations,
     )
     signature_path = work_dir / "concat-signature.txt"
     previous = signature_path.read_text().strip() if signature_path.is_file() else None
@@ -261,9 +362,14 @@ def main() -> None:
             segments,
             output,
             config.output_fps,
-            args.duration,
+            target_duration,
             audio_policy=args.audio_policy,
-            native_audio_duration=config.aligned_frames / 24.0,
+            native_audio_duration=(
+                align_frame_count(max(5, round(schedule[0][0] * config.output_fps)))
+                / config.output_fps
+                if schedule else config.aligned_frames / 24.0
+            ),
+            segment_durations=scheduled_durations,
         )
         signature_path.write_text(signature + "\n")
     else:
@@ -272,9 +378,10 @@ def main() -> None:
     report = {
         "phase": "longrun",
         "output": str(output),
-        "target_duration": args.duration,
+        "target_duration": target_duration,
         "segments": [str(segment) for segment in segments],
         "segment_count": count,
+        "prompt_schedule": schedule,
         "audio_policy": args.audio_policy,
     }
     (work_dir / "longrun-result.json").write_text(json.dumps(report, indent=2) + "\n")

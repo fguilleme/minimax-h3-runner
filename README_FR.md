@@ -44,6 +44,12 @@ Image-to-video avec une première image :
   --output output/fox-i2v.mp4
 ```
 
+Quand `--first-frame` ou `--last-frame` est fourni, le runner dérive
+maintenant automatiquement `width` et `height` depuis le ratio de l’image,
+en respectant les multiples de 32 et le plafond spatial H3. Le même canvas
+est réutilisé pour tous les segments. Le fichier de configuration effectif
+est conservé dans `effective-config.json` lorsque les dimensions changent.
+
 Vidéo longue par segments chaînés :
 
 ```bash
@@ -60,7 +66,29 @@ segment devient la première image du suivant. Les exécutions sont
 reprises automatiquement si leurs artefacts sont encore valides ; utiliser
 `--force` pour tout recalculer.
 
-## Serveur HTTP et exemples `curl`
+## Interface Gradio
+
+Le dépôt fournit une interface web Gradio qui appelle directement le runner
+headless ; le serveur HTTP MiniMax n'est pas nécessaire :
+
+```bash
+./run-gradio.sh
+```
+
+Ouvrir `http://127.0.0.1:7860`. L'interface accepte une image initiale
+facultative, un prompt simple ou une timeline comme
+`2:the woman walks|3:the woman looks left and right slowly`, puis affiche
+automatiquement la vidéo terminée.
+
+Pour une écoute LAN, l'authentification est obligatoire :
+
+```bash
+H3_GRADIO_HOST=0.0.0.0 \
+H3_GRADIO_USER=francois \
+H3_GRADIO_PASSWORD='choisir-un-mot-de-passe' \
+./run-gradio.sh
+```
+
 
 Le serveur accepte un JSON, place le travail en arrière-plan et renvoie
 immédiatement un identifiant de job. Il lance `h3runner.longrun` dans le
@@ -155,6 +183,19 @@ curl -sS 'http://127.0.0.1:8988/status?job=JOB_ID'
 États possibles : `running`, `done` ou `failed`. Le champ `output` donne
 le chemin du MP4 et `log_path` celui du journal du job.
 
+### Récupérer la vidéo
+
+Quand le job est terminé, télécharger directement le MP4 avec :
+
+```bash
+curl -fL -o minimax-h3-JOB_ID.mp4 \
+  'http://127.0.0.1:8988/video?job=JOB_ID'
+```
+
+`GET /video?job=JOB_ID` renvoie `video/mp4` avec `Content-Disposition`. Il
+renvoie `409` tant que le job n'est pas terminé et `404` si le job ou le
+fichier n'existe pas.
+
 Pour annuler un job en cours :
 
 ```bash
@@ -203,9 +244,25 @@ peut produire des artefacts lors des mouvements rapides.
 - `steps`, `seed`, `sampler`, `scheduler` : paramètres de génération ;
 - `audio` : `first` ou `segments` pour les longues vidéos.
 
-Les valeurs par défaut du serveur sont `704x480`, 10 fps, 6 secondes et
-8 étapes. Pour obtenir exactement 5 secondes à 10 fps, les exemples
-explicitent `duration: 5` et `fps: 10`.
+Les prompts peuvent aussi être planifiés par segment avec la syntaxe
+`durée:prompt|durée:prompt`. Chaque entrée produit un segment H3 séparé,
+conserve la dernière image comme continuité et utilise son propre prompt. La
+durée finale est la somme des entrées, puis la concaténation est ajustée à
+cette durée :
+
+```json
+{
+  "prompt": "2:the woman walks|3:the woman looks left and right slowly",
+  "duration": 5,
+  "fps": 10
+}
+```
+
+Les durées sont exprimées en secondes. H3 aligne chaque segment sur sa grille
+temporelle native ; la sortie finale est ensuite trimée à la somme demandée.
+
+Les valeurs par défaut du serveur restent `704x480`, 10 fps, 6 secondes et
+8 étapes lorsque le prompt n'utilise pas cette syntaxe.
 
 ## systemd
 

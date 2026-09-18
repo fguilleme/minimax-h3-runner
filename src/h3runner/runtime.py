@@ -5,6 +5,7 @@ import sys
 import importlib.util
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from .config import H3Config
 
@@ -19,6 +20,15 @@ class ComfyRuntime:
     clipproj_nodes: object
 
 
+def configure_memory_mode(args: Any) -> None:
+    """Keep full-resolution H3 keyframes under the host memory ceiling."""
+    args.disable_async_offload = True
+    args.disable_pinned_memory = True
+    args.lowvram = True
+    args.novram = False
+    args.highvram = False
+
+
 def bootstrap(config: H3Config) -> ComfyRuntime:
     root = config.comfy_root.resolve()
     if not (root / "nodes.py").is_file():
@@ -31,11 +41,7 @@ def bootstrap(config: H3Config) -> ComfyRuntime:
     comfy.options.args_parsing = False
     from comfy.cli_args import args
 
-    args.disable_async_offload = True
-    args.disable_pinned_memory = True
-    args.lowvram = False
-    args.novram = False
-    args.highvram = False
+    configure_memory_mode(args)
 
     import nodes
     import comfy.nested_tensor as nested_tensor

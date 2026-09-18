@@ -83,7 +83,29 @@ Model paths are resolved under `/home/francois/comfy/ComfyUI/models`:
 - `vae/minimax_h3_audio_vae_fp32.safetensors`
 - `loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors`
 
-## HTTP server and curl examples
+## Gradio UI
+
+The repository includes a Gradio web interface that calls the headless runner
+directly; the MiniMax HTTP server is not required:
+
+```bash
+./run-gradio.sh
+```
+
+Open `http://127.0.0.1:7860`. The UI accepts an optional first image, normal
+prompts, and scheduled prompts such as
+`2:the woman walks|3:the woman looks left and right slowly`. It polls the job
+and displays the generated MP4 automatically.
+
+For a LAN bind, authentication is mandatory:
+
+```bash
+H3_GRADIO_HOST=0.0.0.0 \
+H3_GRADIO_USER=francois \
+H3_GRADIO_PASSWORD='choose-a-password' \
+./run-gradio.sh
+```
+
 
 The optional HTTP server queues jobs and returns immediately. It does not
 launch the ComfyUI application; it launches `h3runner.longrun` in the same
@@ -164,7 +186,16 @@ curl -sS 'http://127.0.0.1:8988/status?job=JOB_ID'
 ```
 
 The response's `output` field gives the generated MP4 path and `log_path`
-gives the child-process log. Cancel a running job with:
+gives the child-process log. Download the completed video directly with:
+
+```bash
+curl -fL -o minimax-h3-JOB_ID.mp4 \
+  'http://127.0.0.1:8988/video?job=JOB_ID'
+```
+
+`GET /video?job=JOB_ID` returns `video/mp4` with `Content-Disposition`. It
+returns `409` while the job is not finished and `404` if the job or output
+file does not exist. Cancel a running job with:
 
 ```bash
 curl -sS -X DELETE 'http://127.0.0.1:8988/status?job=JOB_ID'
@@ -233,6 +264,12 @@ Use a first frame:
   --output output/my-i2v.mp4
 ```
 
+When `--first-frame` or `--last-frame` is supplied, the runner now derives
+`width` and `height` from the source image aspect ratio, rounds them to H3's
+multiples of 32, and reuses the same canvas for every chained segment. If the
+dimensions change, the effective configuration is saved as
+`effective-config.json`.
+
 Use both first and last frames:
 
 ```bash
@@ -252,6 +289,22 @@ Choose width and height as multiples of 32. To preserve the source aspect ratio,
 Long-video mode generates multiple H3 segments, extracts the exact final decoded frame of each segment, and uses it as the first frame of the next segment. The seed is incremented for every continuation. During assembly, one output-frame duration is removed from the beginning of each continuation to avoid duplicating the boundary keyframe.
 
 By default, `--audio-policy first` keeps only the native soundtrack from the first segment and loops it across the complete video. This prevents the music from changing at every segment boundary. Video and audio are then trimmed to the exact requested duration.
+
+Prompts can be scheduled per segment with `duration:prompt|duration:prompt`.
+Each entry generates a separate H3 segment, carries forward the last decoded
+frame for visual continuity, and uses its own prompt. The final duration is
+the sum of the schedule entries:
+
+```json
+{
+  "prompt": "2:the woman walks|3:the woman looks left and right slowly",
+  "duration": 5,
+  "fps": 10
+}
+```
+
+Durations are in seconds. H3 snaps each segment to its native temporal grid;
+the final concatenated video is trimmed to the requested schedule total.
 
 ```bash
 ./run-long.sh \

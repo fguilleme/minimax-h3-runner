@@ -1,0 +1,22 @@
+[Unit]
+Description=MiniMax H3 Gradio interface
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/francois/projects/minimax-h3-runner
+Environment=PYTHONUNBUFFERED=1
+Environment=H3_GRADIO_HOST=0.0.0.0
+Environment=H3_GRADIO_PORT=7860
+EnvironmentFile=/home/francois/.config/minimax-h3-gradio/env
+ExecStart=/home/francois/projects/minimax-h3-runner/run-gradio.sh
+Restart=on-failure
+RestartSec=5
+OOMPolicy=continue
+TimeoutStopSec=30
+KillMode=control-group
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target
